@@ -1,0 +1,13 @@
+{
+    "deno.enable": true,
+    "deno.path": "/home/nimzo/.local/share/mise/shims/deno",
+    "deno.lint": true,
+    "editor.defaultFormatter": "denoland.vscode-deno",
+    "editor.formatOnSave": true,
+    "editor.codeActionsOnSave": {
+        "source.fixAll.deno": "explicit"
+    },
+    "[typescript]": {
+        "editor.defaultFormatter": "denoland.vscode-deno"
+    }
+}

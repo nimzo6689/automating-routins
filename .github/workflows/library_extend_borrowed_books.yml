@@ -1,0 +1,29 @@
+name: Library Extend Borrowed Books
+
+on:
+  schedule:
+    # 毎日 UTC 00:00 (日本時間 09:00) に実行
+    - cron: '0 0 * * *'
+  workflow_dispatch: # 手動実行ボタンを有効化
+
+jobs:
+  run-script:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Deno
+        uses: denoland/setup-deno@v1
+        with:
+          deno-version: v1.x
+
+      - name: Run Extend Borrowed Books Script
+        env:
+          USER_CARD_NO: ${{ secrets.USER_CARD_NO }}
+          USER_PASSWD: ${{ secrets.USER_PASSWD }}
+          BASE_URL: ${{ secrets.BASE_URL }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          deno run --allow-net --allow-env main.ts
