@@ -1,0 +1,21 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "request": "launch",
+            "name": "Deno Debug",
+            "type": "node",
+            "runtimeExecutable": "/home/nimzo/.local/share/mise/shims/deno",
+            "runtimeArgs": [
+                "run",
+                "--inspect-brk",
+                "-A",
+                "--env"
+            ],
+            "program": "${file}",
+            "cwd": "${workspaceFolder}",
+            "stopOnEntry": true,
+            "attachSimplePort": 9229
+        }
+    ]
+}
