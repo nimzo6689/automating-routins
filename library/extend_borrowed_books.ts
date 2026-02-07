@@ -1,4 +1,4 @@
-import { DOMParser } from "jsr:@b-fuze/deno-dom@0.1.56";
+import { DOMParser, Element } from "jsr:@b-fuze/deno-dom@0.1.56";
 import {
   Array as A,
   Duration,
@@ -69,6 +69,43 @@ const httpRequest = (url: string, options: RequestInit) =>
     E.retry(retryPolicy),
   );
 
+const requestBase = (
+  cookieJar: Ref.Ref<Record<string, string>>,
+  url: string,
+  options: RequestInit,
+  shouldUpdate: boolean,
+) =>
+  E.gen(function* () {
+    const currentCookies = yield* Ref.get(cookieJar);
+    const res = yield* httpRequest(url, {
+      headers: {
+        ...options.headers,
+        Cookie: getCookieString(currentCookies),
+      },
+      redirect: "manual",
+      ...options,
+    });
+
+    if (shouldUpdate) {
+      const setCookie = res.headers.get("set-cookie");
+      yield* Ref.update(cookieJar, (prev) => parseSetCookie(setCookie, prev));
+    }
+
+    return res;
+  });
+
+const requestAndSave = (
+  cookieJar: Ref.Ref<Record<string, string>>,
+  url: string,
+  options: RequestInit,
+) => requestBase(cookieJar, url, options, true);
+
+const requestOnly = (
+  cookieJar: Ref.Ref<Record<string, string>>,
+  url: string,
+  options: RequestInit,
+) => requestBase(cookieJar, url, options, false);
+
 const sendDiscordNotification = (message: string) =>
   E.gen(function* () {
     if (!DISCORD_WEBHOOK_URL) return;
@@ -81,31 +118,29 @@ const sendDiscordNotification = (message: string) =>
 
 const login = (cookieJar: Ref.Ref<Record<string, string>>) =>
   E.gen(function* () {
+    const loginUrl = `${BASE_URL}/opw/OPW/OPWUSERLOGIN.CSP`;
     const params = new URLSearchParams({
       usercardno: USER_CARD_NO!,
       userpasswd: USER_PASSWD!,
-      NEXTPID: "OPWUSERINFO",
     });
 
-    const res = yield* httpRequest(`${BASE_URL}/opw/OPW/OPWUSERLOGIN.CSP`, {
+    yield* requestAndSave(cookieJar, loginUrl, {});
+
+    const loginOptions = {
       method: "POST",
       body: params,
-      redirect: "manual",
-    });
-
-    const current = yield* Ref.get(cookieJar);
-    yield* Ref.set(
-      cookieJar,
-      parseSetCookie(res.headers.get("set-cookie"), current),
-    );
+    };
+    yield* requestOnly(cookieJar, loginUrl, loginOptions);
+    yield* requestAndSave(cookieJar, loginUrl, loginOptions);
   });
 
 const getLoanBooks = (cookieJar: Ref.Ref<Record<string, string>>) =>
   E.gen(function* () {
-    const cookies = yield* Ref.get(cookieJar);
-    const res = yield* httpRequest(`${BASE_URL}/opw/OPW/OPWUSERINFO.CSP`, {
-      headers: { "Cookie": getCookieString(cookies) },
-    });
+    const res = yield* requestOnly(
+      cookieJar,
+      `${BASE_URL}/opw/OPW/OPWUSERINFO.CSP`,
+      {},
+    );
     const html = yield* E.tryPromise(() => res.text());
 
     const doc = new DOMParser().parseFromString(html, "text/html");
@@ -119,7 +154,7 @@ const getLoanBooks = (cookieJar: Ref.Ref<Record<string, string>>) =>
     const books = Array.from(
       doc!.querySelectorAll("tr.lightcolor, tr.basecolor"),
     ).flatMap((row) => {
-      const tds = (row as any).querySelectorAll("td");
+      const tds = (row as Element).querySelectorAll("td");
       if (tds.length < 8) return [];
       const noText = tds[0].textContent.trim();
       if (!/^\d+$/.test(noText)) return [];
@@ -157,11 +192,14 @@ const extendBook = (
       WARG_8: "",
     });
 
-    const res = yield* httpRequest(`${BASE_URL}/opw/OPW/%25CSP.Broker.cls`, {
-      method: "POST",
-      headers: { "Cookie": getCookieString(cookies) },
-      body: params,
-    });
+    const res = yield* requestOnly(
+      cookieJar,
+      `${BASE_URL}/opw/OPW/%25CSP.Broker.cls`,
+      {
+        method: "POST",
+        body: params,
+      },
+    );
 
     yield* E.sleep(Duration.millis(1000));
 
