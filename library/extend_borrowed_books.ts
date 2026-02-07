@@ -9,15 +9,15 @@ import {
   Schedule,
 } from "npm:effect@3.19.16";
 
-// --- 設定情報 ---
-const BASE_URL = Deno.env.get("LIBRARY_BASE_URL");
-const USER_CARD_NO = Deno.env.get("LIBRARY_USER_CARD_NO");
-const USER_PASSWD = Deno.env.get("LIBRARY_USER_PASSWD");
-const DISCORD_WEBHOOK_URL = Deno.env.get("LIBRARY_DISCORD_WEBHOOK_URL");
+interface User {
+  cardno: string;
+  password: string;
+}
 
-if (!BASE_URL || !USER_CARD_NO || !USER_PASSWD) {
-  console.error("エラー: ログイン情報が設定されていません。");
-  Deno.exit(1);
+interface Config {
+  baseUrl: string;
+  users: User[];
+  discordWebhookUrl: string | null;
 }
 
 // --- リトライ・スケジュール定義 ---
@@ -26,7 +26,7 @@ const retryPolicy = Schedule.fixed(Duration.millis(1000)).pipe(
 );
 
 // --- 状態管理 (Cookies) ---
-const createCookieJar = Ref.make<Record<string, string>>({});
+const createCookieJar = () => Ref.make<Record<string, string>>({});
 
 const parseSetCookie = (
   setCookieHeader: string | null,
@@ -106,22 +106,26 @@ const requestOnly = (
   options: RequestInit,
 ) => requestBase(cookieJar, url, options, false);
 
-const sendDiscordNotification = (message: string) =>
+const sendDiscordNotification = (webhookUrl: string | null, message: string) =>
   E.gen(function* () {
-    if (!DISCORD_WEBHOOK_URL) return;
-    yield* httpRequest(DISCORD_WEBHOOK_URL, {
+    if (!webhookUrl) return;
+    yield* httpRequest(webhookUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ content: message }),
     });
   }).pipe(E.catchAll(() => E.succeed(undefined)));
 
-const login = (cookieJar: Ref.Ref<Record<string, string>>) =>
+const login = (
+  cookieJar: Ref.Ref<Record<string, string>>,
+  baseUrl: string,
+  user: User,
+) =>
   E.gen(function* () {
-    const loginUrl = `${BASE_URL}/opw/OPW/OPWUSERLOGIN.CSP`;
+    const loginUrl = `${baseUrl}/opw/OPW/OPWUSERLOGIN.CSP`;
     const params = new URLSearchParams({
-      usercardno: USER_CARD_NO!,
-      userpasswd: USER_PASSWD!,
+      usercardno: user.cardno,
+      userpasswd: user.password,
     });
 
     yield* requestAndSave(cookieJar, loginUrl, {});
@@ -134,11 +138,14 @@ const login = (cookieJar: Ref.Ref<Record<string, string>>) =>
     yield* requestAndSave(cookieJar, loginUrl, loginOptions);
   });
 
-const getLoanBooks = (cookieJar: Ref.Ref<Record<string, string>>) =>
+const getLoanBooks = (
+  cookieJar: Ref.Ref<Record<string, string>>,
+  baseUrl: string,
+) =>
   E.gen(function* () {
     const res = yield* requestOnly(
       cookieJar,
-      `${BASE_URL}/opw/OPW/OPWUSERINFO.CSP`,
+      `${baseUrl}/opw/OPW/OPWUSERINFO.CSP`,
       {},
     );
     const html = yield* E.tryPromise(() => res.text());
@@ -174,6 +181,7 @@ const getLoanBooks = (cookieJar: Ref.Ref<Record<string, string>>) =>
 
 const extendBook = (
   cookieJar: Ref.Ref<Record<string, string>>,
+  baseUrl: string,
   token: string,
   barcode: string,
 ) =>
@@ -194,7 +202,7 @@ const extendBook = (
 
     const res = yield* requestOnly(
       cookieJar,
-      `${BASE_URL}/opw/OPW/%25CSP.Broker.cls`,
+      `${baseUrl}/opw/OPW/%25CSP.Broker.cls`,
       {
         method: "POST",
         body: params,
@@ -206,45 +214,64 @@ const extendBook = (
     return res.ok;
   });
 
-const program = E.gen(function* () {
-  const cookieJar = yield* createCookieJar;
-  let report = "📚 **図書館自動延長 実行結果**\n";
+// --- 個別ユーザーの処理 ---
+const processUser = (baseUrl: string, user: User) =>
+  E.gen(function* () {
+    const cookieJar = yield* createCookieJar();
+    let userReport = `\n👤 **ユーザー: ${user.cardno}**\n`;
 
-  try {
-    yield* login(cookieJar);
-    const { books, serverMethodToken } = yield* getLoanBooks(cookieJar);
+    try {
+      yield* login(cookieJar, baseUrl, user);
+      const { books, serverMethodToken } = yield* getLoanBooks(
+        cookieJar,
+        baseUrl,
+      );
 
-    const targetBooks = books.filter((
-      b: {
-        title: string;
-        barcode: string;
-        canExtend: boolean;
-        returnDate: string;
-      },
-    ) => b.canExtend);
+      const targetBooks = books.filter((b) => b.canExtend);
 
-    if (targetBooks.length === 0) {
-      report += "延長可能な書籍はありません。";
-    } else {
-      for (const book of targetBooks) {
-        const success = yield* extendBook(
-          cookieJar,
-          serverMethodToken!,
-          book.barcode,
-        );
-        report += `${
-          success ? "✅" : "❌"
-        } ${book.title} (期限: ${book.returnDate})\n`;
+      if (targetBooks.length === 0) {
+        userReport += "延長可能な書籍はありません。\n";
+      } else {
+        for (const book of targetBooks) {
+          const success = yield* extendBook(
+            cookieJar,
+            baseUrl,
+            serverMethodToken!,
+            book.barcode,
+          );
+          userReport += `${
+            success ? "✅" : "❌"
+          } ${book.title} (期限: ${book.returnDate})\n`;
+        }
       }
+    } catch (e) {
+      userReport += `⚠️ エラー: ${
+        e instanceof Error ? e.message : String(e)
+      }\n`;
     }
-  } catch (e) {
-    report += `⚠️ エラー: ${e instanceof Error ? e.message : String(e)}`;
-  } finally {
-    console.log(report);
-    yield* sendDiscordNotification(report);
+    return userReport;
+  });
+
+// --- メインプログラム ---
+const program = E.gen(function* () {
+  // config.jsonの読み込み
+  const configContent = yield* E.tryPromise(() =>
+    Deno.readTextFile("./library/config.json")
+  );
+  const config: Config = JSON.parse(configContent);
+
+  let finalReport = "📚 **図書館自動延長 実行結果**\n";
+
+  // 全ユーザーに対して順番に実行
+  for (const user of config.users) {
+    const userResult = yield* processUser(config.baseUrl, user);
+    finalReport += userResult;
   }
+
+  console.log(finalReport);
+  yield* sendDiscordNotification(config.discordWebhookUrl, finalReport);
 }).pipe(
-  E.catchAll(() => E.succeed(undefined)),
+  E.catchAll((e) => E.logError(`プログラム実行エラー: ${e}`)),
   E.orDie,
 );
 
