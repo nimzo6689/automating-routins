@@ -4,7 +4,7 @@ on:
   schedule:
     # 毎日 UTC 00:00 (日本時間 09:00) に実行
     - cron: "0 0 * * *"
-  workflow_dispatch: # 手動実行ボタンを有効化
+  workflow_dispatch:
 
 jobs:
   run-script:
@@ -19,11 +19,9 @@ jobs:
         with:
           deno-version: v1.x
 
+      - name: Create config.json
+        run: echo '${{ secrets.LIBRARY_CONFIG_JSON }}' > ./library/config.json
+
       - name: Run Extend Borrowed Books Script
-        env:
-          USER_CARD_NO: ${{ secrets.USER_CARD_NO }}
-          USER_PASSWD: ${{ secrets.USER_PASSWD }}
-          BASE_URL: ${{ secrets.BASE_URL }}
-          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: |
-          deno run --allow-net --allow-env ./library/extend_borrowed_books.ts
+          deno run --allow-net --allow-read=./library/config.json ./library/extend_borrowed_books.ts
